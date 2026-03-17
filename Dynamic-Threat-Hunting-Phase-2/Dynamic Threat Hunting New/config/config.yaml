@@ -1,0 +1,112 @@
+# ============================================================
+# Dynamic Threat Hunting for Autonomous Vehicles
+# Master Configuration
+# ============================================================
+
+# ─── Simulation Settings ───
+simulation:
+  num_vehicles: 25             # 25-30 vehicles per scenario
+  num_steps: 300               # Total simulation steps
+  dt: 0.1                      # Time step in seconds (100ms)
+  seed: 42
+  road_type: "urban"           # urban / highway / residential
+  bounds_margin: 500.0         # Area around RSU (meters)
+
+# --- Server (Live Data Collection) ---
+server:
+  udp_send_port: 8000          # UDP port for BSM data (like old CARLA)
+  bsm_rate_hz: 10              # BSMs per second (10 Hz = SAE J2735)
+  csv_log: "data/simulation_log.csv"  # Log all BSMs to CSV
+
+# ─── RSU (Road-Side Unit) ───
+rsu:
+  position_x: 500.0
+  position_y: 500.0
+  max_cpu_pct: 100.0
+  base_memory_mb: 256.0
+  max_connections: 50
+  checkpoint_interval: 50      # Save model checkpoint every N steps
+
+# ─── V2X Communication ───
+v2x:
+  communication_range_m: 300.0
+  packet_loss_rate: 0.02       # Base packet loss (2%)
+  max_latency_ms: 50.0
+  bsm_interval_ms: 100.0      # BSMs every 100ms = 10/sec (SAE J2735)
+
+# ─── Threat Configuration ───
+threats:
+  # Activation schedule (staggered for clarity)
+  poisoning_start_step: 30     # Starts early (needs trust-building time)
+  ghost_start_step: 80         # Mid-simulation
+  sponge_start_step: 150       # Later 
+
+  poisoning:
+    poison_rate: 0.05          # 5% of BSMs are corrupted
+    drift_rate: 0.1            # Feature drift per step
+    trust_build_steps: 30      # Steps of honest behavior first
+    num_attackers: 1
+
+  ghost:
+    num_ghosts: 3              # Ghost vehicles to inject
+    ghost_types:               # Types of ghost deception
+      - "phantom_vehicle"      # Stopped vehicle on road
+      - "sybil_swarm"          # Multiple fake vehicles 
+    num_attackers: 1
+
+  sponge:
+    max_bsm_multiplier: 5      # 5× normal BSM rate
+    feature_oscillation: true
+    intensity_ramp_steps: 20   # Steps to reach full intensity
+    num_attackers: 1
+
+# ─── Detection Model ───
+detection:
+  # Feature dimensions (based on SAE J2735 BSM + computed features)
+  node_features: 10            # Features per vehicle node
+  max_nodes: 35                # Max nodes in graph (vehicles + ghosts)
+  temporal_window: 20          # Timesteps of history
+
+  # Stage 1: GCL
+  gcl:
+    hidden_dim: 64
+    embedding_dim: 32
+    num_heads: 4
+    num_layers: 2
+    edge_dropout_rate: 0.2     # Augmentation: drop 20% edges
+    feature_mask_rate: 0.2     # Augmentation: mask 20% features
+    anomaly_threshold: 0.5     # Score above this = anomalous
+    temperature: 0.5           # NT-Xent temperature
+
+  # Stage 2: Classifier + OOD
+  classifier:
+    spatial_hidden: 64
+    temporal_hidden: 64
+    rsu_hidden: 32
+    fusion_hidden: 128
+    num_classes: 4             # NORMAL, POISONING, GHOST, SPONGE
+    dropout: 0.3
+  
+  ood:
+    temperature: 1.0           # Energy score temperature
+    energy_threshold: -5.0     # Above this = OOD (unknown threat)
+
+  # Stage 3: Agentic Hunter
+  agent:
+    confidence_threshold: 0.7  # Minimum confidence to act
+    investigation_steps: 20    # Monitor for N steps before deciding
+    memory_window: 50          # Remember last N steps of history
+    adaptive_threshold: true   # Adjust thresholds based on RSU stress
+
+# ─── Training ───
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  gcl_epochs: 50
+  classifier_epochs: 100
+  weight_decay: 0.0001
+  patience: 15                 # Early stopping patience
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  samples_per_class: 500       # Training samples per threat class
